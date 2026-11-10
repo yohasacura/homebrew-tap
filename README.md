@@ -21,7 +21,7 @@ this way, the file is not quarantined, so macOS does not ask about it on first l
 ## How it stays current
 
 [update.yml](.github/workflows/update.yml) looks at the latest aesx release once a day. It
-downloads the release files, verifies their build provenance attestation (releases from 1.1.0
+downloads the release files, verifies their build provenance attestation (releases from 1.0.2
 on have one), computes the checksums itself, and commits the new formula.
 [test.yml](.github/workflows/test.yml) then installs it with Homebrew on macOS (both
 architectures) and on Linux, and runs it.
