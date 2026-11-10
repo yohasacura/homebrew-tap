@@ -1,0 +1,99 @@
+# Keeps Formula/aesx.rb at the latest aesx release: downloads the release files, checks where
+# they were built, computes their checksums here (rather than trusting a list), rewrites the
+# formula and, if that changed anything, commits it and starts the Test workflow.
+#
+# Runs daily, and on demand:  gh workflow run update.yml --repo yohasacura/homebrew-tap
+name: Update
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the new formula
+  actions: write    # start the Test workflow for it
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Follow the latest aesx release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rewrite the formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: yohasacura/aesx
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/$SOURCE/releases/latest" --jq .tag_name)
+          version=${tag#v}
+          assets="$RUNNER_TEMP/assets"
+          mkdir -p "$assets"
+          gh release download "$tag" --repo "$SOURCE" --pattern 'aesx-*.tar.gz' --dir "$assets"
+
+          # From 1.1.0 on, every release file carries a build provenance attestation. A file
+          # without one was not built by the release workflow of that repository.
+          case "$version" in
+            1.0.*) echo "aesx $version predates attestations" ;;
+            *) for file in "$assets"/*.tar.gz; do gh attestation verify "$file" --repo "$SOURCE"; done ;;
+          esac
+
+          sum() { sha256sum "$assets/aesx-$version-$1.tar.gz" | cut -d' ' -f1; }
+          base="https://github.com/$SOURCE/releases/download/$tag/aesx-$version"
+          cat > Formula/aesx.rb <<EOF
+          # Written by .github/workflows/update.yml from the latest aesx release; edit the workflow, not this file.
+          class Aesx < Formula
+            desc "Free, offline file encryption with AES-256-GCM and no third-party code"
+            homepage "https://yohasacura.github.io/aesx/"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "$base-osx-arm64.tar.gz"
+                sha256 "$(sum osx-arm64)"
+              end
+              on_intel do
+                url "$base-osx-x64.tar.gz"
+                sha256 "$(sum osx-x64)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "$base-linux-arm64.tar.gz"
+                sha256 "$(sum linux-arm64)"
+              end
+              on_intel do
+                url "$base-linux-x64.tar.gz"
+                sha256 "$(sum linux-x64)"
+              end
+            end
+
+            def install
+              bin.install "aesx"
+            end
+
+            test do
+              assert_match "aesx #{version}", shell_output("#{bin}/aesx --version")
+              assert_match "All self-tests passed.", shell_output("#{bin}/aesx selftest")
+            end
+          end
+          EOF
+
+          if git diff --quiet; then
+            echo "the formula is already at aesx $version"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --all --message "aesx $version"
+          git push
+          # A push made with the workflow's own token starts no other workflow; this does.
+          gh workflow run test.yml --ref "$GITHUB_REF_NAME"

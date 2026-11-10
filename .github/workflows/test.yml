@@ -1,0 +1,60 @@
+# Installs the formula from this checkout with Homebrew itself, on the systems it supports, and
+# runs it. Started by every push and pull request, and by the Update workflow after it has
+# written a new version.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_ANALYTICS: 1
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+
+jobs:
+  install:
+    name: brew install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Put Homebrew on the path (Linux)
+        if: runner.os == 'Linux'
+        run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+
+      - name: Tap this checkout and install from it
+        run: |
+          set -euxo pipefail
+          brew --version
+          brew tap yohasacura/tap "$GITHUB_WORKSPACE"
+          brew install yohasacura/tap/aesx
+          brew test yohasacura/tap/aesx
+
+      - name: Use what was installed
+        run: |
+          set -euxo pipefail
+          export PATH="$(brew --prefix)/bin:$PATH"
+          aesx --version
+          printf 'homebrew' > probe.txt
+          AESX_PASSWORD=probe aesx encrypt probe.txt --iterations 1000
+          AESX_PASSWORD=probe aesx decrypt probe.txt.aesx --output probe.out
+          cmp probe.txt probe.out
+
+      - name: Audit
+        run: brew audit --strict yohasacura/tap/aesx
